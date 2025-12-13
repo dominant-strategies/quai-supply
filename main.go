@@ -9,10 +9,77 @@ import (
 	"net/http"
 )
 
+const (
+	mainnetRPC = "https://rpc.quai.network/cyprus1"
+	testnetRPC = "https://orchard.rpc.quai.network/cyprus1"
+)
+
+// handleMiningInfo creates a handler for the mining info endpoint
+func handleMiningInfo(rpcURL string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Check for decimal query parameter
+		decimalParam := r.URL.Query().Get("Decimal")
+		useDecimal := decimalParam == "true" || decimalParam == "1"
+
+		// Prepare the request body
+		var params []interface{}
+		if useDecimal {
+			params = []interface{}{true}
+		} else {
+			params = []interface{}{}
+		}
+
+		requestBody := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"method":  "quai_getMiningInfo",
+			"params":  params,
+			"id":      1,
+		}
+
+		jsonBody, err := json.Marshal(requestBody)
+		if err != nil {
+			http.Error(w, "Error preparing request", http.StatusInternalServerError)
+			return
+		}
+
+		// Create and configure HTTP request
+		client := &http.Client{}
+		req, err := http.NewRequest("POST", rpcURL, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			http.Error(w, "Error creating request", http.StatusInternalServerError)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		// Make the request
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, "Error making request to upstream", http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		// Read the response
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "Error reading response", http.StatusInternalServerError)
+			return
+		}
+
+		// Forward the response as-is
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}
+}
+
 func main() {
 
 	// In case of some error just log and return the start value
 	lastResponse := big.NewInt(480000000)
+
+	// Mining info endpoints
+	http.HandleFunc("/mininginfo", handleMiningInfo(mainnetRPC))
+	http.HandleFunc("/testnetmininginfo", handleMiningInfo(testnetRPC))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
@@ -45,7 +112,7 @@ func main() {
 
 		// Create and configure HTTP request
 		client := &http.Client{}
-		req, err := http.NewRequest("POST", "https://rpc.quai.network/cyprus1", bytes.NewBuffer(jsonBody))
+		req, err := http.NewRequest("POST", mainnetRPC, bytes.NewBuffer(jsonBody))
 		if err != nil {
 			fmt.Println(w, "Error creating request", http.StatusInternalServerError)
 			replyWithValue(lastResponse)
