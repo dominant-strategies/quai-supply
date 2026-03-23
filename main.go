@@ -84,11 +84,14 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
 		replyWithValue := func(supply *big.Int) {
-			// Prepare response
+			if r.URL.Query().Get("raw") == "true" {
+				w.Header().Set("Content-Type", "text/plain")
+				fmt.Fprint(w, supply.String())
+				return
+			}
 			response := map[string]string{
 				"result": supply.String(),
 			}
-			// Send response
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(response); err != nil {
 				fmt.Println(w, "Error encoding JSON", http.StatusInternalServerError)
