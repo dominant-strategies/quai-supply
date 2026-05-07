@@ -14,6 +14,66 @@ const (
 	testnetRPC = "https://orchard.rpc.quai.network/cyprus1"
 )
 
+func callRPC(rpcURL, method string, params []interface{}) ([]byte, error) {
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+		"id":      1,
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", rpcURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	return io.ReadAll(resp.Body)
+}
+
+func callRPCBatch(rpcURL, method string, params []interface{}) ([]byte, error) {
+	requestBody := []map[string]interface{}{
+		{
+			"jsonrpc": "2.0",
+			"method":  method,
+			"params":  params,
+			"id":      1,
+		},
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", rpcURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	return io.ReadAll(resp.Body)
+}
+
 // handleMiningInfo creates a handler for the mining info endpoint
 func handleMiningInfo(rpcURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +132,85 @@ func handleMiningInfo(rpcURL string) http.HandlerFunc {
 	}
 }
 
+// handleRewardsAnalytics creates a handler for the cumulative Quai rewards endpoint.
+func handleRewardsAnalytics(rpcURL string) http.HandlerFunc {
+	lastResponse := "0"
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		replyWithValue := func(value string) {
+			if r.URL.Query().Get("raw") == "true" {
+				w.Header().Set("Content-Type", "text/plain")
+				fmt.Fprint(w, value)
+				return
+			}
+			response := map[string]string{
+				"result": value,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				fmt.Println(w, "Error encoding JSON", http.StatusInternalServerError)
+			}
+		}
+
+		body, err := callRPCBatch(rpcURL, "quai_rewardAnalytics", []interface{}{})
+		if err != nil {
+			fmt.Println(w, "Error making request to upstream", http.StatusInternalServerError)
+			replyWithValue(lastResponse)
+			return
+		}
+
+		type RewardsResponse struct {
+			Result struct {
+				CumulativeQuaiMined string `json:"cumulativeQuaiMined"`
+			} `json:"result"`
+		}
+
+		rewardsResp, err := decodeRewardsResponse(body)
+		if err != nil {
+			fmt.Println(w, "Error parsing upstream response", http.StatusInternalServerError)
+			replyWithValue(lastResponse)
+			return
+		}
+		if rewardsResp.Result.CumulativeQuaiMined == "" {
+			fmt.Println(w, "Missing cumulativeQuaiMined in upstream response", http.StatusInternalServerError)
+			replyWithValue(lastResponse)
+			return
+		}
+
+		lastResponse = rewardsResp.Result.CumulativeQuaiMined
+		replyWithValue(lastResponse)
+	}
+}
+
+func decodeRewardsResponse(body []byte) (struct {
+	Result struct {
+		CumulativeQuaiMined string `json:"cumulativeQuaiMined"`
+	} `json:"result"`
+}, error) {
+	var rewardsResp struct {
+		Result struct {
+			CumulativeQuaiMined string `json:"cumulativeQuaiMined"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &rewardsResp); err == nil && rewardsResp.Result.CumulativeQuaiMined != "" {
+		return rewardsResp, nil
+	}
+
+	var batchResp []struct {
+		Result struct {
+			CumulativeQuaiMined string `json:"cumulativeQuaiMined"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &batchResp); err != nil {
+		return rewardsResp, err
+	}
+	if len(batchResp) == 0 {
+		return rewardsResp, nil
+	}
+	rewardsResp.Result.CumulativeQuaiMined = batchResp[0].Result.CumulativeQuaiMined
+	return rewardsResp, nil
+}
+
 func main() {
 
 	// In case of some error just log and return the start value
@@ -80,6 +219,8 @@ func main() {
 	// Mining info endpoints
 	http.HandleFunc("/mininginfo", handleMiningInfo(mainnetRPC))
 	http.HandleFunc("/testnetmininginfo", handleMiningInfo(testnetRPC))
+	http.HandleFunc("/rewards", handleRewardsAnalytics(mainnetRPC))
+	http.HandleFunc("/testnetrewards", handleRewardsAnalytics(testnetRPC))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
